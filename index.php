@@ -67,6 +67,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['bmecatFiles'])) {
         // Ausgabetyp bestimmen (Einzeldatei oder mehrere Dateien)
         $outputType = isset($_POST['outputType']) && $_POST['outputType'] === 'multi' ? 'multi' : 'single';
         
+        // Datanorm-Version bestimmen
+        $datanormVersion = isset($_POST['datanormVersion']) && $_POST['datanormVersion'] === '04' ? '04' : '050';
+        
         // Arrays für die verschiedenen Dateipfade initialisieren
         $mainFilePath = null;
         $classFiles = [];
@@ -108,7 +111,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['bmecatFiles'])) {
             // Konvertierung starten
             require_once 'converter.php';
             try {
-                $converter = new BMECatToDatanormConverter($mainFilePath, $classFiles);
+                // Übergabe der Datanorm-Version als zusätzlicher Parameter
+                $converter = new BMECatToDatanormConverter($mainFilePath, $classFiles, null, $datanormVersion);
                 
                 $baseFileName = uniqid('datanorm_');
                 
@@ -120,7 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['bmecatFiles'])) {
                     $result = $converter->convert($outputFilePath);
                     
                     if ($result) {
-                        $message = "Konvertierung erfolgreich!";
+                        $message = "Konvertierung erfolgreich! (Datanorm Version: " . ($datanormVersion === '04' ? '4.0' : '5.0') . ")";
                         $downloadFile = $outputFileName;
                     } else {
                         $message = "Fehler bei der Konvertierung.";
@@ -149,7 +153,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['bmecatFiles'])) {
                             }
                             $zip->close();
                             
-                            $message = "Konvertierung erfolgreich! Mehrere Datanorm-Dateien wurden erzeugt.";
+                            $message = "Konvertierung erfolgreich! Mehrere Datanorm-Dateien wurden erzeugt. (Datanorm Version: " . ($datanormVersion === '04' ? '4.0' : '5.0') . ")";
                             $downloadFile = $zipFileName;
                         } else {
                             $message = "Konvertierung erfolgreich, aber ZIP-Erstellung fehlgeschlagen.";
@@ -198,7 +202,7 @@ function getUploadErrorMessage($errorCode) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BMECat zu Datanorm5 Konverter</title>
+    <title>BMECat zu Datanorm Konverter</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.10.5/font/bootstrap-icons.min.css">
     <style>
@@ -247,8 +251,8 @@ function getUploadErrorMessage($errorCode) {
 <body>
     <div class="container">
         <div class="header">
-            <h1>BMECat zu Datanorm5 Konverter</h1>
-            <p class="lead">Konvertieren Sie BMECat-XML-Dateien in das Datanorm5-Format</p>
+            <h1>BMECat zu Datanorm Konverter</h1>
+            <p class="lead">Konvertieren Sie BMECat-XML-Dateien in das Datanorm-Format</p>
         </div>
         
         <?php if (!empty($message)): ?>
@@ -294,10 +298,30 @@ function getUploadErrorMessage($errorCode) {
                             <div class="form-text ms-4">
                                 • .001: Artikeldaten (A-Sätze)<br>
                                 • .002: Warengruppendaten (W-Sätze)<br>
-                                • .003: Textdaten (T-Sätze)
+                                • .003: Textdaten (T/B-Sätze)
                             </div>
                         </div>
                     </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Datanorm-Version:</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="datanormVersion" id="version50" value="050" checked>
+                            <label class="form-check-label" for="version50">
+                                Version 5.0 (Modern) - Semikolon-getrennte Felder
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="datanormVersion" id="version40" value="04">
+                            <label class="form-check-label" for="version40">
+                                Version 4.0 (Legacy) - Kompatibel mit älteren Systemen
+                            </label>
+                            <div class="form-text ms-4">
+                                Empfohlen für ältere ERP- und Warenwirtschaftssysteme, die das neuere Format nicht unterstützen.
+                            </div>
+                        </div>
+                    </div>
+                    
                     <button type="submit" class="btn btn-primary">Konvertieren</button>
                 </form>
                 
@@ -398,7 +422,7 @@ function getUploadErrorMessage($errorCode) {
         <?php if (!empty($downloadFile)): ?>
         <div class="mt-4">
             <a href="<?php echo htmlspecialchars('download.php?file=' . urlencode($downloadFile)); ?>" class="btn btn-success" download>
-                Datanorm5-Datei herunterladen
+                Datanorm-Datei herunterladen
             </a>
             <p class="form-text mt-2">Falls der Download nicht startet, <a href="<?php echo htmlspecialchars('output/' . urlencode($downloadFile)); ?>" download>klicken Sie hier für den direkten Download</a>.</p>
         </div>
@@ -414,16 +438,22 @@ function getUploadErrorMessage($errorCode) {
                     </h2>
                     <div id="collapseOne" class="accordion-collapse collapse" aria-labelledby="headingOne" data-bs-parent="#accordionInfo">
                         <div class="accordion-body">
-                            <p>Dieser Konverter wandelt BMECat-XML-Dateien in das Datanorm5-Format um.</p>
+                            <p>Dieser Konverter wandelt BMECat-XML-Dateien in das Datanorm-Format um.</p>
                             <p><strong>BMECat:</strong> Ein XML-basierter Standard für elektronische Produktkataloge.</p>
-                            <p><strong>Datanorm5:</strong> Ein Standard für den Austausch von Artikeldaten im deutschen Bauwesen/Handwerk.</p>
-                            <p>Der Konverter extrahiert relevante Daten aus der BMECat-Struktur und ordnet sie dem entsprechenden Datanorm5-Format zu.</p>
+                            <p><strong>Datanorm:</strong> Ein Standard für den Austausch von Artikeldaten im deutschen Bauwesen/Handwerk.</p>
+                            <p>Der Konverter extrahiert relevante Daten aus der BMECat-Struktur und ordnet sie dem entsprechenden Datanorm-Format zu.</p>
+                            <p><strong>Unterstützte Versionen:</strong></p>
+                            <ul>
+                                <li><strong>Datanorm 5.0 (Modern):</strong> Die aktuelle Version mit Semikolon-getrennten Feldern</li>
+                                <li><strong>Datanorm 4.0 (Legacy):</strong> Ältere Version für Kompatibilität mit bestehenden Systemen</li>
+                            </ul>
                             <p><strong>Funktionsweise:</strong></p>
                             <ul>
                                 <li>Laden Sie die BMECat-Hauptdatei und optional die class.xml hoch</li>
                                 <li>Die Hauptdatei enthält Artikeldaten, während die class.xml Warengruppendefinitionen enthält</li>
                                 <li>Sie können die Dateien per Drag & Drop oder über die Dateiauswahl hochladen</li>
                                 <li>Wählen Sie das gewünschte Ausgabeformat: eine einzelne Datei oder mehrere Dateien</li>
+                                <li>Wählen Sie die Datanorm-Version entsprechend Ihrem Zielsystem</li>
                             </ul>
                         </div>
                     </div>
@@ -432,7 +462,7 @@ function getUploadErrorMessage($errorCode) {
         </div>
         
         <div class="footer text-center">
-            <p>BMECat zu Datanorm5 Konverter &copy; <?php echo date('Y'); ?></p>
+            <p>BMECat zu Datanorm Konverter &copy; <?php echo date('Y'); ?></p>
         </div>
     </div>
     

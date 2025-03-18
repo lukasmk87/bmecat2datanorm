@@ -42,8 +42,11 @@ header('Cache-Control: must-revalidate');
 header('Pragma: public');
 header('Content-Length: ' . filesize($filepath));
 
-// Ausgabe-Buffer leeren
-ob_clean();
+// Ausgabe-Buffer-Handling korrigieren:
+// Nur löschen, wenn ein Buffer existiert
+if (ob_get_level()) {
+    ob_clean();
+}
 flush();
 
 // Dateiinhalt ausgeben
