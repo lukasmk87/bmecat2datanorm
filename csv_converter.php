@@ -56,30 +56,31 @@ class CsvToDatanormConverter {
     }
     
     // Hilfsfunktion zum Lesen einer CSV-Zeile mit korrekter Kodierung und Trennzeichen
-    private function readCsvLine($handle) {
-        // Versuchen mit unterschiedlichen Trennzeichen (Semikolon, Komma)
-        $line = fgetcsv($handle, 0, ';');
-        
-        // Wenn Semikolon nicht funktioniert, versuchen wir es mit Komma
-        if ($line !== false && count($line) <= 1 && strpos($line[0], ',') !== false) {
-            // Zurück zum Anfang der Zeile
-            fseek($handle, ftell($handle) - strlen(implode(';', $line)) - 2);
-            $line = fgetcsv($handle, 0, ',');
-        }
-        
-        // Kodierungskonvertierung falls nötig (ISO-8859-1 zu UTF-8)
-        if ($line !== false) {
-            foreach ($line as &$value) {
-                // Versuchen zu erkennen, ob die Kodierung angepasst werden muss
-                if (!mb_check_encoding($value, 'UTF-8') && mb_check_encoding($value, 'ISO-8859-1')) {
-                    $value = mb_convert_encoding($value, 'UTF-8', 'ISO-8859-1');
-                }
-                $value = trim($value);
-            }
-        }
-        
-        return $line;
+private function readCsvLine($handle) {
+    // Versuchen mit unterschiedlichen Trennzeichen (Semikolon, Komma)
+    // Parameter für fgetcsv: handle, length, delimiter, enclosure, escape
+    $line = fgetcsv($handle, 0, ';', '"', '\\');
+    
+    // Wenn Semikolon nicht funktioniert, versuchen wir es mit Komma
+    if ($line !== false && count($line) <= 1 && strpos($line[0], ',') !== false) {
+        // Zurück zum Anfang der Zeile
+        fseek($handle, ftell($handle) - strlen(implode(';', $line)) - 2);
+        $line = fgetcsv($handle, 0, ',', '"', '\\');
     }
+    
+    // Kodierungskonvertierung falls nötig (ISO-8859-1 zu UTF-8)
+    if ($line !== false) {
+        foreach ($line as &$value) {
+            // Versuchen zu erkennen, ob die Kodierung angepasst werden muss
+            if (!mb_check_encoding($value, 'UTF-8') && mb_check_encoding($value, 'ISO-8859-1')) {
+                $value = mb_convert_encoding($value, 'UTF-8', 'ISO-8859-1');
+            }
+            $value = trim($value);
+        }
+    }
+    
+    return $line;
+}
     
     // Spaltenüberschriften ermitteln und Mapping erstellen
     private function initializeColumnMap() {
