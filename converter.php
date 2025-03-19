@@ -1,5 +1,6 @@
 <?php
 // converter.php - Konverter-Klasse für BMECat zu Datanorm mit Versionswechsel 4.0/5.0
+// Erweitert mit WRG- und P-Satz-Unterstützung
 
 class BMECatToDatanormConverter {
     private $bmecatFilePath;
@@ -136,6 +137,12 @@ class BMECatToDatanormConverter {
             // W-Satz (Warengruppensätze) schreiben - optional
             $this->writeProductGroupRecords($outputFile);
             
+            // WRG-Sätze (G-Sätze) schreiben - neu
+            $this->writeWRGRecords($outputFile);
+            
+            // P-Sätze (Preisänderungssätze) schreiben - neu
+            $this->writePriceChangeRecords($outputFile);
+            
             // Z-Satz (END-Record) schreiben
             $this->writeZRecord($outputFile);
             
@@ -149,7 +156,7 @@ class BMECatToDatanormConverter {
     // Konvertierungsmethode für Ausgabe in mehrere Datanorm-Dateien
     public function convertMultiFile($outputFiles) {
         // Prüfen, ob alle erforderlichen Dateinamen vorhanden sind
-        if (!isset($outputFiles['001']) || !isset($outputFiles['002']) || !isset($outputFiles['003'])) {
+        if (!isset($outputFiles['001']) || !isset($outputFiles['002']) || !isset($outputFiles['003']) || !isset($outputFiles['004'])) {
             throw new Exception("Nicht alle erforderlichen Ausgabedateien angegeben.");
         }
         
@@ -157,12 +164,14 @@ class BMECatToDatanormConverter {
         $file001 = fopen($outputFiles['001'], 'w'); // Artikeldaten (A-Sätze)
         $file002 = fopen($outputFiles['002'], 'w'); // Warengruppen (W-Sätze)
         $file003 = fopen($outputFiles['003'], 'w'); // Texte (B/T-Sätze)
+        $file004 = fopen($outputFiles['004'], 'w'); // WRG-Datei und Preisänderungen
         
-        if ($file001 === false || $file002 === false || $file003 === false) {
+        if ($file001 === false || $file002 === false || $file003 === false || $file004 === false) {
             // Geöffnete Dateien schließen
             if ($file001 !== false) fclose($file001);
             if ($file002 !== false) fclose($file002);
             if ($file003 !== false) fclose($file003);
+            if ($file004 !== false) fclose($file004);
             
             throw new Exception("Konnte eine oder mehrere Ausgabedateien nicht erstellen.");
         }
@@ -183,12 +192,19 @@ class BMECatToDatanormConverter {
             $this->writeTextRecordsOnly($file003);
             $this->writeZRecord($file003);
             
+            // .004 Datei: V-Satz, WRG-Sätze, P-Sätze und Z-Satz
+            $this->writeVRecord($file004);
+            $this->writeWRGRecords($file004);
+            $this->writePriceChangeRecords($file004);
+            $this->writeZRecord($file004);
+            
             return true;
         } finally {
             // Alle Dateien schließen
             fclose($file001);
             fclose($file002);
             fclose($file003);
+            fclose($file004);
         }
     }
     
@@ -222,7 +238,7 @@ class BMECatToDatanormConverter {
         fwrite($outputFile, $vRecord . PHP_EOL);
     }
     
-    // A-Sätze (Artikeldaten) und Textsätze schreiben - unterstützt beide Versionen
+    // A-Sätze (Artikeldaten) und Textsätze schreiben
     private function writeArticleRecords($outputFile) {
         $xpath = new DOMXPath($this->xmlDoc);
         
@@ -344,7 +360,7 @@ class BMECatToDatanormConverter {
                     fwrite($outputFile, $tRecords);
                 }
                 
-                // Weitere T-Sätze für zusätzliche Eigenschaften
+                // Weitere T-Sätze für zusätzliche Eigenschaften schreiben
                 $features = $xpath->query('.//FEATURE', $articleNode);
                 if ($features->length > 0) {
                     $featureText = "";
@@ -477,6 +493,153 @@ class BMECatToDatanormConverter {
         }
     }
     
+    // NEU: WRG-Sätze (G-Sätze) schreiben für erweiterte Warengruppeninformationen
+    private function writeWRGRecords($outputFile) {
+        $xpath = new DOMXPath($this->xmlDoc);
+        
+        // Kategorien im BMECat finden
+        $categoryNodes = $xpath->query('//CLASSIFICATION_SYSTEM/CLASSIFICATION_GROUP');
+        
+        foreach ($categoryNodes as $categoryNode) {
+            $groupId = $this->getNodeValue($categoryNode, 'CLASSIFICATION_GROUP_ID');
+            $groupDesc = $this->getNodeValue($categoryNode, 'CLASSIFICATION_GROUP_NAME');
+            
+            if (!empty($groupId) && !empty($groupDesc)) {
+                // G-Satz (WRG) formatieren und schreiben
+                $gRecord = $this->formatWRGRecord($groupId, $groupDesc);
+                fwrite($outputFile, $gRecord . PHP_EOL);
+            }
+        }
+        
+        // Schaut auch in anderen class XML docs nach Warengruppen
+        foreach ($this->classXmlDocs as $classXmlDoc) {
+            $classXpath = new DOMXPath($classXmlDoc);
+            $classGroupNodes = $classXpath->query('//CLASSIFICATION_GROUP');
+            
+            foreach ($classGroupNodes as $classGroupNode) {
+                $classGroupId = $this->getNodeValue($classGroupNode, 'CLASSIFICATION_GROUP_ID');
+                $classGroupDesc = $this->getNodeValue($classGroupNode, 'CLASSIFICATION_GROUP_NAME');
+                
+                if (!empty($classGroupId) && !empty($classGroupDesc)) {
+                    // G-Satz (WRG) formatieren und schreiben
+                    $gRecord = $this->formatWRGRecord($classGroupId, $classGroupDesc);
+                    fwrite($outputFile, $gRecord . PHP_EOL);
+                }
+            }
+        }
+    }
+    
+    // NEU: G-Satz (WRG) formatieren
+    private function formatWRGRecord($groupId, $groupDesc) {
+        if ($this->datanormVersion === '050') {
+            // Datanorm 5.0 Semikolon-Format für G-Satz:
+            // G;Warengruppennr;Warengruppenbezeichnung;EbeneNr;ÜbergeordneteGrp;
+            
+            // Standard-Werte für Ebene und übergeordnete Gruppe (falls nicht vorhanden)
+            $level = "1"; // Standardmäßig Ebene 1
+            $parentGroup = ""; // Standardmäßig keine übergeordnete Gruppe
+            
+            return "G;{$groupId};{$groupDesc};{$level};{$parentGroup};";
+        } else {
+            // Datanorm 4.0 Format für G-Satz
+            // G;Warengruppennr;Warengruppenbezeichnung;
+            
+            return "G;{$groupId};{$groupDesc};;;";
+        }
+    }
+    
+    // NEU: P-Sätze (Preisänderungssätze) schreiben
+    private function writePriceChangeRecords($outputFile) {
+        $xpath = new DOMXPath($this->xmlDoc);
+        
+        // Alle Artikel mit Preisen finden
+        $articleNodes = $xpath->query('//ARTICLE');
+        
+        foreach ($articleNodes as $articleNode) {
+            // Artikeldaten extrahieren
+            $articleId = $this->getNodeValue($articleNode, 'SUPPLIER_AID');
+            
+            // Preisinformationen - Verkaufspreis (Listenpreis)
+            $listPrice = 0;
+            $listPriceNode = $xpath->query('.//ARTICLE_PRICE_DETAILS/ARTICLE_PRICE[@price_type="net_list"]', $articleNode)->item(0) ?: 
+                             $xpath->query('.//ARTICLE_PRICE_DETAILS/ARTICLE_PRICE', $articleNode)->item(0);
+            
+            if ($listPriceNode) {
+                $priceAmount = $xpath->query('.//PRICE_AMOUNT', $listPriceNode)->item(0);
+                if ($priceAmount) {
+                    $listPrice = floatval($priceAmount->nodeValue);
+                }
+            }
+            
+            // Einkaufspreis - versuchen verschiedene Kennungen zu finden
+            $purchasePrice = null;
+            $purchasePriceNode = $xpath->query('.//ARTICLE_PRICE_DETAILS/ARTICLE_PRICE[@price_type="net_customer"]', $articleNode)->item(0) ?: 
+                                $xpath->query('.//ARTICLE_PRICE_DETAILS/ARTICLE_PRICE[@price_type="purchase_price"]', $articleNode)->item(0);
+            
+            if ($purchasePriceNode) {
+                $purchasePriceAmount = $xpath->query('.//PRICE_AMOUNT', $purchasePriceNode)->item(0);
+                if ($purchasePriceAmount) {
+                    $purchasePrice = floatval($purchasePriceAmount->nodeValue);
+                }
+            }
+            
+            // Wenn kein spezifischer Einkaufspreis gefunden, berechne 75% vom Listenpreis als Schätzwert
+            if ($purchasePrice === null && $listPrice > 0) {
+                $purchasePrice = $listPrice * 0.75;
+            }
+            
+            // Nur P-Satz schreiben, wenn beide Preise vorhanden sind
+            if ($listPrice > 0 && $purchasePrice > 0) {
+                // Rabattgruppe bestimmen
+                $rabattGrp = '';
+                $catalogGroupAssignments = $xpath->query('.//ARTICLE_REFERENCE[@type="group_system"]', $articleNode);
+                if ($catalogGroupAssignments->length > 0) {
+                    $rabattGrp = $this->getNodeValue($catalogGroupAssignments->item(0), 'CATALOG_GROUP_ID');
+                    // Auf 2-3 Zeichen kürzen, falls zu lang
+                    $rabattGrp = substr($rabattGrp, 0, 3);
+                }
+                
+                // P-Satz formatieren und schreiben
+                $pRecord = $this->formatPRecord($articleId, $listPrice, $purchasePrice, $rabattGrp);
+                fwrite($outputFile, $pRecord . PHP_EOL);
+            }
+        }
+    }
+    
+    // NEU: P-Satz formatieren
+    private function formatPRecord($articleId, $listPrice, $purchasePrice, $rabattGrp = '') {
+        if ($this->datanormVersion === '050') {
+            // Datanorm 5.0 Semikolon-Format für P-Satz:
+            // P;Artikel-Nr;Preis;EK;RABKZ;PREISEINH;ZEITEINHEIT;MWST;PREISFORM;
+            
+            // Preise formatieren mit Punkt als Dezimaltrenner
+            $formattedListPrice = number_format($listPrice, 2, '.', '');
+            $formattedPurchasePrice = number_format($purchasePrice, 2, '.', '');
+            
+            // Standardwerte
+            $preiseinheit = "0"; // 0=Preis bezieht sich auf 1 Einheit
+            $zeiteinheit = ""; // Keine Zeiteinheit
+            $mwst = "19"; // Standardmehrwertsteuer (19%)
+            $preisform = ""; // Keine besondere Preisform
+            
+            return "P;{$articleId};{$formattedListPrice};{$formattedPurchasePrice};{$rabattGrp};{$preiseinheit};{$zeiteinheit};{$mwst};{$preisform};";
+        } else {
+            // Datanorm 4.0 Format für P-Satz:
+            // P;Artikel-Nr;Preis;EK;RABKZ;ZEITEINHEIT;MWST;PREISFORM;
+            
+            // Formatierte Preise ohne Dezimalstellen für Version 4.0
+            $formattedListPrice = number_format($listPrice, 0, '', '');
+            $formattedPurchasePrice = number_format($purchasePrice, 0, '', '');
+            
+            // Standardwerte
+            $zeiteinheit = ""; // Keine Zeiteinheit
+            $mwst = "19"; // Standardmehrwertsteuer (19%)
+            $preisform = ""; // Keine besondere Preisform
+            
+            return "P;{$articleId};{$formattedListPrice};{$formattedPurchasePrice};{$rabattGrp};{$zeiteinheit};{$mwst};{$preisform};";
+        }
+    }
+    
     // Z-Satz (END-Record) schreiben
     private function writeZRecord($outputFile) {
         if ($this->datanormVersion === '050') {
@@ -493,5 +656,10 @@ class BMECatToDatanormConverter {
             $zRecord = "Z";
             fwrite($outputFile, $zRecord . PHP_EOL);
         }
+    }
+    
+    // Lieferantennamen setzen
+    public function setSupplierName($name) {
+        $this->supplierName = $name;
     }
 }

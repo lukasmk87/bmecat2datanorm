@@ -1,6 +1,6 @@
 <?php
 // BMECat zu Datanorm5 Konverter
-// index.php - Hauptdatei
+// index.php - Hauptdatei - Mit XLS, CSV, WRG und P-Satz Unterstützung
 
 // Fehlerberichterstattung für Entwicklung (in Produktion auskommentieren)
 ini_set('display_errors', 1);
@@ -70,13 +70,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['bmecatFiles'])) {
         // Datanorm-Version bestimmen
         $datanormVersion = isset($_POST['datanormVersion']) && $_POST['datanormVersion'] === '04' ? '04' : '050';
         
-        // Optionalen Lieferantennamen abrufen (für CSV)
+        // Optionalen Lieferantennamen abrufen (für CSV/XLS)
         $supplierName = isset($_POST['supplierName']) ? trim($_POST['supplierName']) : '';
         
         // Arrays für die verschiedenen Dateipfade initialisieren
         $mainFilePath = null;
         $classFiles = [];
         $csvFilePath = null;
+        $xlsFilePath = null;
         
         // Alle hochgeladenen Dateien verarbeiten
         for ($i = 0; $i < $file_count; $i++) {
@@ -97,6 +98,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['bmecatFiles'])) {
                     if ($fileExtension === 'csv') {
                         // CSV Datei
                         $csvFilePath = $filepath;
+                    } else if ($fileExtension === 'xls' || $fileExtension === 'xlsx') {
+                        // Excel-Datei
+                        $xlsFilePath = $filepath;
                     } else if (strtolower($original_filename) === 'class.xml' || stripos($original_filename, 'class') !== false) {
                         // Es handelt sich um eine Klassifikationsdatei für BMECat
                         $classFiles[] = $filepath;
@@ -121,7 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['bmecatFiles'])) {
         }
         
         // Stellen Sie sicher, dass zumindest eine gültige Datei hochgeladen wurde
-        if ($mainFilePath !== null || $csvFilePath !== null) {
+        if ($mainFilePath !== null || $csvFilePath !== null || $xlsFilePath !== null) {
             // Konvertierung starten
             try {
                 if ($csvFilePath !== null) {
@@ -133,10 +137,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['bmecatFiles'])) {
                     if (!empty($supplierName)) {
                         $converter->setSupplierName($supplierName);
                     }
+                } else if ($xlsFilePath !== null) {
+                    // XLS Konvertierung
+                    require_once 'xls_converter.php';
+                    $converter = new XlsToDatanormConverter($xlsFilePath, $datanormVersion);
+                    
+                    // Lieferantennamen setzen, falls angegeben
+                    if (!empty($supplierName)) {
+                        $converter->setSupplierName($supplierName);
+                    }
                 } else {
                     // BMECat Konvertierung
                     require_once 'converter.php';
                     $converter = new BMECatToDatanormConverter($mainFilePath, $classFiles, null, $datanormVersion);
+                    
+                    // Lieferantennamen setzen, falls angegeben
+                    if (!empty($supplierName)) {
+                        $converter->setSupplierName($supplierName);
+                    }
                 }
                 
                 $baseFileName = uniqid('datanorm_');
@@ -157,14 +175,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['bmecatFiles'])) {
                 } else {
                     // Mehrere Dateien erzeugen
                     $outputFiles = [
-                        '001' => $outputDir . $baseFileName . '.001',
-                        '002' => $outputDir . $baseFileName . '.002',
-                        '003' => $outputDir . $baseFileName . '.003'
+                        '001' => $outputDir . $baseFileName . '.001',  // Artikeldaten
+                        '002' => $outputDir . $baseFileName . '.002',  // Warengruppen
+                        '003' => $outputDir . $baseFileName . '.003',  // Texte
+                        '004' => $outputDir . $baseFileName . '.004',  // WRG-Datei und Preisänderungen
+                        'wrg' => $outputDir . $baseFileName . '.wrg'   // Zusätzliche WRG-Datei (Kopie von .004)
                     ];
                     
                     $result = $converter->convertMultiFile($outputFiles);
                     
                     if ($result) {
+                        // Kopie von .004 als .wrg erstellen
+                        if (file_exists($outputFiles['004'])) {
+                            copy($outputFiles['004'], $outputFiles['wrg']);
+                        }
+                        
                         // ZIP-Datei für den Download erstellen
                         $zipFileName = $baseFileName . '.zip';
                         $zipFilePath = $outputDir . $zipFileName;
@@ -192,7 +217,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['bmecatFiles'])) {
                 $message = "Fehler: " . $e->getMessage();
             }
         } else {
-            $message = "Keine gültige Eingabedatei gefunden. Bitte laden Sie eine BMECat-XML oder CSV-Datei hoch.";
+            $message = "Keine gültige Eingabedatei gefunden. Bitte laden Sie eine BMECat-XML, CSV oder XLS/XLSX-Datei hoch.";
         }
     } else {
         $message = "Bitte wählen Sie mindestens eine Datei aus.";
@@ -227,7 +252,7 @@ function getUploadErrorMessage($errorCode) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BMECat/CSV zu Datanorm Konverter</title>
+    <title>Datanorm-Konverter</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.10.5/font/bootstrap-icons.min.css">
     <style>
@@ -284,8 +309,8 @@ function getUploadErrorMessage($errorCode) {
 <body>
     <div class="container">
         <div class="header">
-            <h1>BMECat/CSV zu Datanorm Konverter</h1>
-            <p class="lead">Konvertieren Sie BMECat-XML oder CSV Dateien in das Datanorm-Format</p>
+            <h1>Datanorm-Konverter</h1>
+            <p class="lead">Konvertieren Sie BMECat-XML, Excel oder CSV Dateien in das Datanorm-Format</p>
         </div>
         
         <?php if (!empty($message)): ?>
@@ -295,15 +320,14 @@ function getUploadErrorMessage($errorCode) {
         <?php endif; ?>
         
         <div class="info-box">
-            <h5><i class="bi bi-info-circle"></i> Hinweis zu Excel-Dateien</h5>
-            <p>Excel-Dateien (XLS/XLSX) werden nicht direkt unterstützt. Bitte speichern Sie Ihre Excel-Tabelle als CSV-Datei (mit Semikolon als Trennzeichen) und laden Sie diese hoch.</p>
-            <ol class="small">
-                <li>Öffnen Sie Ihre Excel-Datei</li>
-                <li>Gehen Sie zu <strong>Datei > Speichern unter</strong></li>
-                <li>Wählen Sie <strong>CSV (Trennzeichen-getrennt) (*.csv)</strong> als Dateityp</li>
-                <li>Bestätigen Sie die Meldungen bezüglich Formatierung</li>
-                <li>Laden Sie die erstellte CSV-Datei hier hoch</li>
-            </ol>
+            <h5><i class="bi bi-info-circle"></i> Unterstützte Dateitypen</h5>
+            <p>Der Konverter unterstützt folgende Dateitypen:</p>
+            <ul>
+                <li><strong>BMECat XML</strong> - Standardformat für elektronische Produktkataloge</li>
+                <li><strong>Excel (XLS/XLSX)</strong> - Tabellenkalkulationsformat von Microsoft</li>
+                <li><strong>CSV</strong> - Textdatei mit Semikolon als Trennzeichen</li>
+            </ul>
+            <p>Für optimale Ergebnisse stellen Sie sicher, dass Ihre Dateien die erforderlichen Spalten enthalten.</p>
         </div>
         
         <div class="card">
@@ -316,22 +340,22 @@ function getUploadErrorMessage($errorCode) {
                             <div id="drop-message">
                                 <i class="bi bi-cloud-arrow-up fs-1"></i>
                                 <p>Dateien hier ablegen oder klicken zum Auswählen</p>
-                                <p class="text-muted small">Unterstützte Formate: BMECat XML, CSV (mit Semikolon als Trennzeichen)</p>
+                                <p class="text-muted small">Unterstützte Formate: BMECat XML, Excel (XLS/XLSX), CSV</p>
                             </div>
                             <div id="file-list" class="d-none mt-3">
                                 <h6>Ausgewählte Dateien:</h6>
                                 <ul class="list-group" id="selected-files"></ul>
                             </div>
-                            <input class="form-control d-none" type="file" id="bmecatFiles" name="bmecatFiles[]" multiple accept=".xml,.csv">
+                            <input class="form-control d-none" type="file" id="bmecatFiles" name="bmecatFiles[]" multiple accept=".xml,.csv,.xls,.xlsx">
                         </div>
                         <div class="form-text">Wählen Sie die Eingabedatei(en) per Drag & Drop oder Dateiauswahl</div>
                     </div>
                     
-                    <!-- Feld für Lieferantenname (für CSV) -->
+                    <!-- Feld für Lieferantenname -->
                     <div class="mb-3">
                         <label for="supplierName" class="form-label fw-bold">Lieferantenname (optional):</label>
                         <input type="text" class="form-control" id="supplierName" name="supplierName" placeholder="Name des Lieferanten">
-                        <div class="form-text">Wird im Datanorm-Header verwendet. Besonders wichtig für CSV-Konvertierung.</div>
+                        <div class="form-text">Wird im Datanorm-Header verwendet. Besonders wichtig für CSV/Excel-Konvertierung.</div>
                     </div>
                     
                     <div class="mb-3">
@@ -350,7 +374,8 @@ function getUploadErrorMessage($errorCode) {
                             <div class="form-text ms-4">
                                 • .001: Artikeldaten (A-Sätze)<br>
                                 • .002: Warengruppendaten (W-Sätze)<br>
-                                • .003: Textdaten (T/B-Sätze)
+                                • .003: Textdaten (T/B-Sätze)<br>
+                                • .004/.wrg: Erweiterte Warengruppen und Preisänderungen (G/P-Sätze)
                             </div>
                         </div>
                     </div>
@@ -408,6 +433,8 @@ function getUploadErrorMessage($errorCode) {
                                     
                                     if (file.name.toLowerCase().includes('class')) {
                                         icon = '<i class="bi bi-diagram-3"></i>';
+                                    } else if (fileExt === 'xls' || fileExt === 'xlsx') {
+                                        icon = '<i class="bi bi-file-earmark-excel"></i>';
                                     } else if (fileExt === 'csv') {
                                         icon = '<i class="bi bi-file-earmark-spreadsheet"></i>';
                                     } else if (fileExt === 'xml') {
@@ -466,7 +493,7 @@ function getUploadErrorMessage($errorCode) {
                             for (let i = 0; i < files.length; i++) {
                                 // Nur unterstützte Dateien hinzufügen
                                 const ext = files[i].name.split('.').pop().toLowerCase();
-                                if (['xml', 'csv'].includes(ext)) {
+                                if (['xml', 'csv', 'xls', 'xlsx'].includes(ext)) {
                                     fileListInput.items.add(files[i]);
                                 }
                             }
@@ -497,22 +524,31 @@ function getUploadErrorMessage($errorCode) {
                     </h2>
                     <div id="collapseOne" class="accordion-collapse collapse" aria-labelledby="headingOne" data-bs-parent="#accordionInfo">
                         <div class="accordion-body">
-                            <p>Dieser Konverter wandelt BMECat-XML oder CSV-Dateien in das Datanorm-Format um.</p>
+                            <p>Dieser Konverter wandelt verschiedene Eingabeformate in das Datanorm-Format um.</p>
                             <p><strong>Unterstützte Eingabeformate:</strong></p>
                             <ul>
                                 <li><strong>BMECat XML:</strong> Ein XML-basierter Standard für elektronische Produktkataloge.</li>
+                                <li><strong>Excel (XLS/XLSX):</strong> Tabellenkalkulationsformat von Microsoft.</li>
                                 <li><strong>CSV:</strong> Semikolon-getrennte Textdateien mit Artikeldaten.</li>
                             </ul>
                             <p><strong>Datanorm:</strong> Ein Standard für den Austausch von Artikeldaten im deutschen Bauwesen/Handwerk.</p>
                             
-                            <p><strong>CSV-Format:</strong></p>
+                            <p><strong>Unterstützte Satzarten:</strong></p>
+                            <ul>
+                                <li><strong>A-Sätze:</strong> Artikeldaten (Nummer, Beschreibung, Preis, etc.)</li>
+                                <li><strong>B/T-Sätze:</strong> Textsätze mit ausführlichen Beschreibungen</li>
+                                <li><strong>W-Sätze:</strong> Warengruppendaten</li>
+                                <li><strong>G-Sätze:</strong> Erweiterte Warengruppendaten (in .004/.wrg Datei)</li>
+                                <li><strong>P-Sätze:</strong> Preisänderungssätze (Listen- und Einkaufspreise)</li>
+                            </ul>
+                            
+                            <p><strong>Excel/CSV-Format:</strong></p>
                             <ul>
                                 <li>Die erste Zeile muss Spaltenüberschriften enthalten</li>
                                 <li>Mindestanforderung: Spalten "Artikelnummer" und "Kurztext1"</li>
-                                <li>Weitere unterstützte Spalten: Kurztext2, Mengeneinheit, Preis, Rabattgruppe, etc.</li>
-                                <li>Für Datanorm 5.0: Ausschreibungstext (Langtext) und Bildverweise werden unterstützt</li>
+                                <li>Für Preisänderungssätze: "Preis" und "Einkaufspreis" Spalten</li>
+                                <li>Für WRG-Dateien: "Hauptwarengruppe" und "WRG-Beschreibung" Spalten</li>
                                 <li>Spalten sollten durch Semikolon (;) getrennt sein</li>
-                                <li>Bei Preisen wird sowohl Punkt als auch Komma als Dezimaltrenner unterstützt</li>
                             </ul>
                             
                             <p><strong>Unterstützte Versionen:</strong></p>
@@ -524,9 +560,9 @@ function getUploadErrorMessage($errorCode) {
                             <ul>
                                 <li>Laden Sie die Eingabedatei(en) hoch</li>
                                 <li>Für BMECat: Hauptdatei und optional die class.xml</li>
-                                <li>Für CSV: Datei mit korrekter Spaltenstruktur (siehe oben)</li>
+                                <li>Für Excel/CSV: Datei mit korrekter Spaltenstruktur (siehe oben)</li>
                                 <li>Wählen Sie das gewünschte Ausgabeformat: eine einzelne Datei oder mehrere Dateien</li>
-                                <li>Wählen Sie die Datanorm-Version entsprechend Ihrem Zielsystem</li>
+                                <li>Mehrere Dateien umfassen: .001, .002, .003, .004 und .wrg</li>
                             </ul>
                         </div>
                     </div>
@@ -535,16 +571,16 @@ function getUploadErrorMessage($errorCode) {
                 <div class="accordion-item">
                     <h2 class="accordion-header" id="headingTwo">
                         <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTwo" aria-expanded="false" aria-controls="collapseTwo">
-                            CSV-Datei Beispielstruktur
+                            Tabellen-Struktur für Excel/CSV
                         </button>
                     </h2>
                     <div id="collapseTwo" class="accordion-collapse collapse" aria-labelledby="headingTwo" data-bs-parent="#accordionInfo">
                         <div class="accordion-body">
-                            <p>Beispiel für eine korrekte CSV-Dateistruktur:</p>
-                            <pre style="background-color: #f8f9fa; padding: 10px; border-radius: 4px;">Artikelnummer;Kurztext1;Kurztext2;Mengeneinheit;Preis;Rabattgruppe
-10001;Heizkörperventil DN15;Thermostatventil mit Voreinstellung;Stck;24,95;01
-10002;Heizkörper Typ 22 600x1000;Seitlich angeschlossen 2100W;Stck;159,00;01
-10003;Anschluss-Set für HK;Durchgangsform;Stck;18,75;02</pre>
+                            <p>Beispiel für eine korrekte Excel/CSV-Dateistruktur (mit P-Sätzen und WRG):</p>
+                            <pre style="background-color: #f8f9fa; padding: 10px; border-radius: 4px;">Artikelnummer;Kurztext1;Kurztext2;Mengeneinheit;Preis;Einkaufspreis;Rabattgruppe;Hauptwarengruppe;WRG-Beschreibung
+10001;Heizkörperventil DN15;Thermostatventil;Stck;24,95;18,75;01;HK;Heizkörper-Zubehör
+10002;Heizkörper Typ 22 600x1000;Seitlich;Stck;159,00;120,00;01;HK;Heizkörper-Produkte
+10003;Anschluss-Set für HK;Durchgangsform;Stck;18,75;14,00;02;ZB;Zubehör und Ersatzteile</pre>
                             
                             <p>Unterstützte Spaltenbezeichnungen:</p>
                             <ul class="small">
@@ -553,8 +589,10 @@ function getUploadErrorMessage($errorCode) {
                                 <li><strong>Für Kurztext2:</strong> "Kurztext2", "Ergänzung", "Zusatz"</li>
                                 <li><strong>Für Mengeneinheit:</strong> "Mengeneinheit", "ME", "Einheit"</li>
                                 <li><strong>Für Preis:</strong> "Preis", "Listenpreis", "VP", "VK"</li>
+                                <li><strong>Für Einkaufspreis:</strong> "Einkaufspreis", "EK", "EP"</li>
                                 <li><strong>Für Rabattgruppe:</strong> "Rabattgruppe", "RabattGrp", "RG"</li>
-                                <li><strong>Für Warengruppen:</strong> "Hauptwarengruppe", "HWG", "Warengruppe1" und "Warengruppe", "WG", "Warengruppe2"</li>
+                                <li><strong>Für Warengruppen:</strong> "Hauptwarengruppe", "HWG" und "Warengruppe", "WG"</li>
+                                <li><strong>Für WRG-Beschreibung:</strong> "WRG-Beschreibung", "Warengruppenbeschreibung"</li>
                                 <li><strong>Für Ausschreibungstext:</strong> "Ausschreibungstext", "Langtext"</li>
                             </ul>
                         </div>
@@ -564,7 +602,7 @@ function getUploadErrorMessage($errorCode) {
         </div>
         
         <div class="footer text-center">
-            <p>BMECat/CSV zu Datanorm Konverter &copy; <?php echo date('Y'); ?></p>
+            <p>Datanorm-Konverter &copy; <?php echo date('Y'); ?></p>
         </div>
     </div>
     

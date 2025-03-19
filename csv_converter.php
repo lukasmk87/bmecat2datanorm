@@ -90,6 +90,7 @@ class CsvToDatanormConverter {
             'kurztext2' => ['Kurztext2', 'Ergänzung', 'Zusatz'],
             'mengeneinheit' => ['Mengeneinheit', 'ME', 'Einheit'],
             'preis' => ['Preis', 'Listenpreis', 'VP', 'VK'],
+            'einkaufspreis' => ['Einkaufspreis', 'EK', 'EP'],
             'rabattgruppe' => ['Rabattgruppe', 'RabattGrp', 'RG'],
             'preiskennzeichen' => ['Preiskennzeichen', 'PreisKZ', 'PKZ'],
             'preiseinheit' => ['Preiseinheit', 'PE'],
@@ -102,7 +103,8 @@ class CsvToDatanormConverter {
             'bild2' => ['Bilddateiname 2', 'Bild2', 'Bildverweis2'],
             'bild3' => ['Bilddateiname 3', 'Bild3', 'Bildverweis3'],
             'bild4' => ['Bilddateiname 4', 'Bild4', 'Bildverweis4'],
-            'bild5' => ['Bilddateiname 5', 'Bild5', 'Bildverweis5']
+            'bild5' => ['Bilddateiname 5', 'Bild5', 'Bildverweis5'],
+            'wrgbeschreibung' => ['WRG-Beschreibung', 'Warengruppenbeschreibung', 'WGBeschreibung']
         ];
         
         // Spaltenzuordnung initialisieren
@@ -148,6 +150,9 @@ class CsvToDatanormConverter {
             // W-Satz (Warengruppensätze) schreiben - optional
             $this->writeProductGroupRecords($outputFile);
             
+            // P-Sätze (Preisänderungen) schreiben - wenn einkaufspreis vorhanden
+            $this->writePriceChangeRecords($outputFile);
+            
             // Z-Satz (END-Record) schreiben
             $this->writeZRecord($outputFile);
             
@@ -161,7 +166,7 @@ class CsvToDatanormConverter {
     // Konvertierungsmethode für Ausgabe in mehrere Datanorm-Dateien
     public function convertMultiFile($outputFiles) {
         // Prüfen, ob alle erforderlichen Dateinamen vorhanden sind
-        if (!isset($outputFiles['001']) || !isset($outputFiles['002']) || !isset($outputFiles['003'])) {
+        if (!isset($outputFiles['001']) || !isset($outputFiles['002']) || !isset($outputFiles['003']) || !isset($outputFiles['004'])) {
             throw new Exception("Nicht alle erforderlichen Ausgabedateien angegeben.");
         }
         
@@ -169,12 +174,14 @@ class CsvToDatanormConverter {
         $file001 = fopen($outputFiles['001'], 'w'); // Artikeldaten (A-Sätze)
         $file002 = fopen($outputFiles['002'], 'w'); // Warengruppen (W-Sätze)
         $file003 = fopen($outputFiles['003'], 'w'); // Texte (B/T-Sätze)
+        $file004 = fopen($outputFiles['004'], 'w'); // WRG-Datei (erweiterte Warengruppen)
         
-        if ($file001 === false || $file002 === false || $file003 === false) {
+        if ($file001 === false || $file002 === false || $file003 === false || $file004 === false) {
             // Geöffnete Dateien schließen
             if ($file001 !== false) fclose($file001);
             if ($file002 !== false) fclose($file002);
             if ($file003 !== false) fclose($file003);
+            if ($file004 !== false) fclose($file004);
             
             throw new Exception("Konnte eine oder mehrere Ausgabedateien nicht erstellen.");
         }
@@ -195,12 +202,19 @@ class CsvToDatanormConverter {
             $this->writeTextRecordsOnly($file003);
             $this->writeZRecord($file003);
             
+            // .004 Datei: V-Satz, WRG-Sätze und Z-Satz (erweiterte Warengruppen)
+            $this->writeVRecord($file004);
+            $this->writeWRGRecords($file004);
+            $this->writePriceChangeRecords($file004); // P-Sätze in die WRG-Datei
+            $this->writeZRecord($file004);
+            
             return true;
         } finally {
             // Alle Dateien schließen
             fclose($file001);
             fclose($file002);
             fclose($file003);
+            fclose($file004);
         }
     }
     
@@ -353,6 +367,145 @@ class CsvToDatanormConverter {
                 $bRecord = $this->formatBRecord($articleId, $shortDesc);
                 fwrite($outputFile, $bRecord . PHP_EOL);
             }
+        }
+    }
+    
+    // WRG-Sätze schreiben (erweiterte Warengruppen-Informationen) - für .004 Datei
+    private function writeWRGRecords($outputFile) {
+        // Eindeutige Warengruppen und ihre Beschreibungen sammeln
+        $wrgGroups = [];
+        
+        // Nur verarbeiten, wenn Warengruppen-Spalten existieren
+        if (!isset($this->columnMap['hauptwarengruppe'])) {
+            return; // Keine Warengruppen-Spalten
+        }
+        
+        // Zeilen verarbeiten
+        foreach ($this->data as $rowData) {
+            // Zeilendaten in assoziatives Array umwandeln
+            $mappedData = $this->mapRowToColumns($rowData);
+            
+            // Leere Zeilen überspringen
+            if (empty($mappedData['artikelnummer'])) {
+                continue;
+            }
+            
+            // Warengruppendaten extrahieren
+            if (isset($mappedData['hauptwarengruppe']) && !empty($mappedData['hauptwarengruppe'])) {
+                $groupId = $mappedData['hauptwarengruppe'];
+                
+                // Beschreibung aus wrgbeschreibung-Spalte oder warengruppe (oder leer lassen)
+                $groupDesc = '';
+                if (isset($mappedData['wrgbeschreibung']) && !empty($mappedData['wrgbeschreibung'])) {
+                    $groupDesc = $mappedData['wrgbeschreibung'];
+                } elseif (isset($mappedData['warengruppe']) && !empty($mappedData['warengruppe'])) {
+                    $groupDesc = $mappedData['warengruppe'];
+                }
+                
+                // Eindeutige Warengruppen speichern
+                if (!empty($groupId) && !isset($wrgGroups[$groupId])) {
+                    $wrgGroups[$groupId] = $groupDesc;
+                }
+            }
+        }
+        
+        // WRG-Sätze für eindeutige Warengruppen schreiben
+        foreach ($wrgGroups as $groupId => $groupDesc) {
+            $wrgRecord = $this->formatWRGRecord($groupId, $groupDesc);
+            fwrite($outputFile, $wrgRecord . PHP_EOL);
+        }
+    }
+    
+    // WRG-Satz formatieren (erweiterte Warengruppen)
+    private function formatWRGRecord($groupId, $groupDesc) {
+        if ($this->datanormVersion === '050') {
+            // Datanorm 5.0 Semikolon-Format für WRG-Satz:
+            // G;Warengruppennr;Warengruppenbezeichnung;EbeneNr;ÜbergeordneteGrp;
+            
+            // Standard-Werte für Ebene und übergeordnete Gruppe (falls nicht vorhanden)
+            $level = "1"; // Standardmäßig Ebene 1
+            $parentGroup = ""; // Standardmäßig keine übergeordnete Gruppe
+            
+            return "G;{$groupId};{$groupDesc};{$level};{$parentGroup};";
+        } else {
+            // Datanorm 4.0 Format für WRG-Satz
+            // G;Warengruppennr;Warengruppenbezeichnung;
+            
+            return "G;{$groupId};{$groupDesc};;;";
+        }
+    }
+    
+    // P-Sätze (Preisänderungen) schreiben
+    private function writePriceChangeRecords($outputFile) {
+        // Nur verarbeiten, wenn Einkaufspreis und Listenpreis vorhanden sind
+        if (!isset($this->columnMap['preis']) || !isset($this->columnMap['einkaufspreis'])) {
+            return; // Keine Preisänderungen möglich ohne beide Preise
+        }
+        
+        // Zeilen verarbeiten
+        foreach ($this->data as $rowData) {
+            // Zeilendaten in assoziatives Array umwandeln
+            $mappedData = $this->mapRowToColumns($rowData);
+            
+            // Leere Zeilen überspringen
+            if (empty($mappedData['artikelnummer'])) {
+                continue;
+            }
+            
+            // Nur verarbeiten, wenn beide Preise vorhanden sind
+            if (!isset($mappedData['preis']) || !isset($mappedData['einkaufspreis']) || 
+                empty($mappedData['preis']) || empty($mappedData['einkaufspreis'])) {
+                continue;
+            }
+            
+            // Artikeldaten extrahieren
+            $articleId = $mappedData['artikelnummer'];
+            $listPrice = (float)str_replace(',', '.', $mappedData['preis']);
+            $purchasePrice = (float)str_replace(',', '.', $mappedData['einkaufspreis']);
+            
+            // P-Satz formatieren und schreiben
+            $pRecord = $this->formatPRecord($articleId, $listPrice, $purchasePrice, $mappedData);
+            fwrite($outputFile, $pRecord . PHP_EOL);
+        }
+    }
+    
+    // P-Satz formatieren (Preisänderungen)
+    private function formatPRecord($articleId, $listPrice, $purchasePrice, $rowData) {
+        if ($this->datanormVersion === '050') {
+            // Datanorm 5.0 Semikolon-Format für P-Satz:
+            // P;Artikel-Nr;Preis;EK;RABKZ;PREISEINH;ZEITEINHEIT;MWST;PREISFORM;
+            
+            // Formatierte Preise mit Punkt als Dezimaltrenner
+            $formattedListPrice = number_format($listPrice, 2, '.', '');
+            $formattedPurchasePrice = number_format($purchasePrice, 2, '.', '');
+            
+            // Zusätzliche Felder
+            $rabattKz = isset($rowData['rabattgruppe']) ? $rowData['rabattgruppe'] : '';
+            $preiseinheit = isset($rowData['preiseinheit']) ? $rowData['preiseinheit'] : '0'; // Standardmäßig pro Stück
+            
+            // Standardwerte für zusätzliche Felder
+            $zeiteinheit = ""; // Keine Zeiteinheit
+            $mwst = "19"; // Standardmehrwertsteuer (19%)
+            $preisform = ""; // Keine besondere Preisform
+            
+            return "P;{$articleId};{$formattedListPrice};{$formattedPurchasePrice};{$rabattKz};{$preiseinheit};{$zeiteinheit};{$mwst};{$preisform};";
+        } else {
+            // Datanorm 4.0 Format für P-Satz:
+            // P;Artikel-Nr;Preis;EK;RABKZ;ZEITEINHEIT;MWST;PREISFORM;
+            
+            // Formatierte Preise ohne Dezimalstellen für Version 4.0
+            $formattedListPrice = number_format($listPrice, 0, '', '');
+            $formattedPurchasePrice = number_format($purchasePrice, 0, '', '');
+            
+            // Zusätzliche Felder
+            $rabattKz = isset($rowData['rabattgruppe']) ? $rowData['rabattgruppe'] : '';
+            
+            // Standardwerte für zusätzliche Felder
+            $zeiteinheit = ""; // Keine Zeiteinheit
+            $mwst = "19"; // Standardmehrwertsteuer (19%)
+            $preisform = ""; // Keine besondere Preisform
+            
+            return "P;{$articleId};{$formattedListPrice};{$formattedPurchasePrice};{$rabattKz};{$zeiteinheit};{$mwst};{$preisform};";
         }
     }
     
